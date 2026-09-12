@@ -17,6 +17,13 @@ import {
   deleteDoc,
   doc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 // Firebase 콘솔 > 프로젝트 설정 > 일반 에서 발급받은 값입니다.
 const firebaseConfig = {
@@ -31,6 +38,50 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const memosCol = collection(db, "memos");
+
+
+// ===================================================
+// 구글 로그인
+// 로그인/로그아웃 버튼을 #userArea에 그립니다.
+// ===================================================
+
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+
+let currentUser = null;
+
+const userArea = document.getElementById("userArea");
+
+function renderUserArea() {
+  userArea.innerHTML = "";
+
+  if (currentUser) {
+    const name = document.createElement("span");
+    name.textContent = currentUser.displayName + "님";
+    userArea.appendChild(name);
+
+    const logoutBtn = document.createElement("button");
+    logoutBtn.textContent = "로그아웃";
+    logoutBtn.onclick = function () {
+      signOut(auth);
+    };
+    userArea.appendChild(logoutBtn);
+  } else {
+    const loginBtn = document.createElement("button");
+    loginBtn.textContent = "구글로 로그인";
+    loginBtn.onclick = function () {
+      signInWithPopup(auth, googleProvider).catch(function (err) {
+        console.error("로그인에 실패했습니다.", err);
+      });
+    };
+    userArea.appendChild(loginBtn);
+  }
+}
+
+onAuthStateChanged(auth, function (user) {
+  currentUser = user;
+  renderUserArea();
+});
 
 
 // --- 메모 목록 ---
@@ -61,6 +112,8 @@ function loadMemos() {
 // 메모를 새로 씁니다.
 // 백엔드 2: 여기에 "누가 썼는지"(uid)를 함께 저장하게 됩니다.
 function addMemo(text) {
+  if (text.trim().length < 5) return;
+
   addDoc(memosCol, {
     text: text,
     createdAt: Date.now()
@@ -124,7 +177,7 @@ input.onkeydown = function (e) {
     e.preventDefault();
 
     const text = input.value.trim();
-    if (text === "") return;
+    if (text.length < 5) return;
 
     // Firestore에 저장되면 onSnapshot이 자동으로 다시 그려 줍니다.
     addMemo(text);
