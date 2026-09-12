@@ -14,8 +14,10 @@ import {
   orderBy,
   onSnapshot,
   addDoc,
+  updateDoc,
   deleteDoc,
-  doc
+  doc,
+  getDoc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   getAuth,
@@ -81,7 +83,33 @@ function renderUserArea() {
 onAuthStateChanged(auth, function (user) {
   currentUser = user;
   renderUserArea();
+  refreshTeacherStatus();
 });
+
+
+// --- 교사 여부 확인 ---
+// roles/{uid} 문서의 role 필드가 "teacher"면 교사로 취급합니다.
+// (Firestore 규칙에서도 같은 방식으로 교사 여부를 확인합니다.)
+let isTeacher = false;
+
+function refreshTeacherStatus() {
+  if (!currentUser) {
+    isTeacher = false;
+    render();
+    return;
+  }
+
+  getDoc(doc(db, "roles", currentUser.uid))
+    .then(function (snap) {
+      isTeacher = snap.exists() && snap.data().role === "teacher";
+      render();
+    })
+    .catch(function (err) {
+      console.error("교사 여부를 확인하지 못했습니다.", err);
+      isTeacher = false;
+      render();
+    });
+}
 
 
 // --- 메모 목록 ---
@@ -110,12 +138,17 @@ function loadMemos() {
 }
 
 // 메모를 새로 씁니다.
-// 백엔드 2: 여기에 "누가 썼는지"(uid)를 함께 저장하게 됩니다.
+// 누가 썼는지 알 수 있도록 로그인한 사용자의 uid를 함께 저장합니다.
 function addMemo(text) {
   if (text.trim().length < 5) return;
+  if (!currentUser) {
+    console.error("로그인 후에 메모를 쓸 수 있습니다.");
+    return;
+  }
 
   addDoc(memosCol, {
     text: text,
+    uid: currentUser.uid,
     createdAt: Date.now()
   }).catch(function (err) {
     console.error("메모를 저장하지 못했습니다.", err);
@@ -123,11 +156,43 @@ function addMemo(text) {
 }
 
 // 메모를 지웁니다.
-// 백엔드 2: 지금은 누구든 남의 메모를 지울 수 있습니다. 이걸 막는 것이 과제입니다.
+// 본인 메모가 아니거나 교사가 아니면 Firestore 규칙이 막아 줍니다.
 function deleteMemo(id) {
   deleteDoc(doc(db, "memos", id)).catch(function (err) {
     console.error("메모를 지우지 못했습니다.", err);
   });
+}
+
+// 교사가 버튼을 누르면 Gemini에게 이 메모에 대한 코멘트를 요청하고,
+// 결과를 memo 문서의 aiComment 필드에 저장합니다.
+function addAiComment(memo) {
+  askGemini(memo.text)
+    .then(function (comment) {
+      return updateDoc(doc(db, "memos", memo.id), { aiComment: comment });
+    })
+    .catch(function (err) {
+      console.error("AI 댓글을 생성하지 못했습니다.", err);
+      alert("AI 댓글을 만들지 못했습니다. 콘솔(F12)을 확인해 주세요.");
+    });
+}
+
+// Vercel 서버리스 함수(/api/gemini)를 통해 Gemini에게 코멘트를 요청합니다.
+// API 키는 서버(api/gemini.js)에만 있고, 브라우저에는 노출되지 않습니다.
+function askGemini(memoText) {
+  return fetch("/api/gemini", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: memoText })
+  })
+    .then(function (res) {
+      if (!res.ok) {
+        throw new Error("Gemini 서버 요청이 실패했습니다. (status " + res.status + ")");
+      }
+      return res.json();
+    })
+    .then(function (data) {
+      return data.comment;
+    });
 }
 
 
@@ -160,6 +225,25 @@ function makeMemo(memo) {
   const span = document.createElement("span");
   span.textContent = memo.text;
   div.appendChild(span);
+
+  if (memo.aiComment) {
+    const ai = document.createElement("div");
+    ai.className = "ai-comment";
+    ai.textContent = "🤖 " + memo.aiComment;
+    div.appendChild(ai);
+  }
+
+  if (isTeacher) {
+    const aiBtn = document.createElement("button");
+    aiBtn.className = "ai-btn";
+    aiBtn.textContent = "AI 댓글";
+    aiBtn.onclick = function () {
+      aiBtn.disabled = true;
+      aiBtn.textContent = "생성 중…";
+      addAiComment(memo);
+    };
+    div.appendChild(aiBtn);
+  }
 
   return div;
 }
